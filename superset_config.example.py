@@ -23,7 +23,12 @@ os.environ.setdefault(
 
 # Superset datasets the assistant may query. Queries run as the asking user,
 # so dataset permissions and Row Level Security apply as on dashboards.
+# Always available, in addition to the datasets of the dashboard being viewed.
 os.environ.setdefault("HOSPITAL_CHAT_DATASETS", "24,30")
+# "true": on a dashboard, use only that dashboard's datasets.
+os.environ.setdefault("HOSPITAL_CHAT_DASHBOARD_ONLY", "false")
+# Columns hidden from the assistant: "column" (any dataset) or "<dataset_id>.column".
+os.environ.setdefault("HOSPITAL_CHAT_SENSITIVE_COLUMNS", "")
 os.environ.setdefault("HOSPITAL_CHAT_MAX_ROWS", "200")
 # Question/answer pairs remembered per conversation (stored in the Superset cache).
 os.environ.setdefault("HOSPITAL_CHAT_HISTORY_TURNS", "8")

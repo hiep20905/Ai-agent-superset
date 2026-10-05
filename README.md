@@ -14,22 +14,33 @@ ngay trong khung chat.
   theo từng người dùng trong cache Redis của Superset.
 - **Biểu đồ từ số liệu thật**: cột / đường / tròn, dựng từ kết quả truy vấn (AI
   không tự đưa số), kèm nút "Mở trong Superset" để chỉnh sửa và lưu.
+- **Theo ngữ cảnh dashboard**: tự dùng dataset của dashboard đang mở (kiểm tra
+  quyền xem dashboard), cộng thêm các dataset cấu hình sẵn.
+- **Trả lời dạng streaming**: chữ hiện dần, kèm tiến trình "Đang truy vấn dữ
+  liệu…", "Đã lấy 5 dòng dữ liệu".
+- **Truy vấn linh hoạt**: metric có sẵn hoặc sum/avg/min/max/count trên cột;
+  lọc ==, IN, between, contains...; tên cột/giá trị gõ không dấu vẫn khớp
+  ("khoa tim mach" -> 'Khoa Tim mạch'); câu hỏi có mốc thời gian bắt buộc lọc
+  theo thời gian.
+- **Ẩn cột nhạy cảm**: cột được đánh dấu không bao giờ tới AI.
 
 ## Kiến trúc
 
 ```
- Trình duyệt                        Superset (backend extension: api.py)
- ┌──────────────┐  GET /ask        ┌────────────────────────────────────────┐
- │ ChatPanel    │ ───────────────▶ │ 1. Đọc lịch sử hội thoại (Redis)        │
- │ (React)      │                  │ 2. Đọc dataset người dùng được xem      │
- │              │                  │    (cột, metric, mô tả, giá trị)        │
- │ Markdown     │                  │ 3. Gọi AI với 2 công cụ:                │
- │ Chart (SVG)  │ ◀─────────────── │      query_dataset, draw_chart          │
- └──────────────┘  answer + charts │ 4. Chạy truy vấn bằng ChartDataCommand  │
-                                   │    với tài khoản người hỏi (quyền + RLS)│
-                                   └───────────────┬────────────────────────┘
-                                                   │
-                                  Ollama (nội bộ)  hoặc  Gemini API (Google)
+ Trình duyệt                          Superset (backend extension)
+ ┌──────────────┐ POST /ask (CSRF)   ┌─────────────────────────────────────────┐
+ │ ChatPanel    │ ─────────────────▶ │ 1. Ngữ cảnh: dashboard đang mở + dataset │
+ │ (React)      │  câu hỏi, id hội   │    người dùng được xem (cột, metric, mô  │
+ │              │  thoại, dashboard  │    tả, giá trị; bỏ cột nhạy cảm)         │
+ │ Markdown     │                    │ 2. Lịch sử hội thoại (Redis)            │
+ │ Chart (SVG)  │ ◀───────────────── │ 3. Vòng gọi AI + công cụ:                │
+ └──────────────┘  SSE: context,     │      query_dataset, draw_chart,         │
+                   tool_start/result,│      describe_dataset                    │
+                   token, done       │ 4. Truy vấn bằng ChartDataCommand với   │
+                                     │    tài khoản người hỏi (quyền + RLS)    │
+                                     └────────────────┬────────────────────────┘
+                                                      │
+                                     Ollama (nội bộ)  hoặc  Gemini API (Google)
 ```
 
 ## Cấu trúc mã nguồn
@@ -37,11 +48,23 @@ ngay trong khung chat.
 | Đường dẫn | Vai trò |
 |---|---|
 | `extension.json` | Tên, phiên bản, publisher của extension |
-| `backend/src/demo/hospital_chat/api.py` | Toàn bộ logic backend: catalog dataset, công cụ, vòng hỏi–đáp Ollama/Gemini, bộ nhớ hội thoại, endpoint `/ask` |
-| `backend/src/demo/hospital_chat/entrypoint.py` | Superset nạp file này khi khởi động để đăng ký API |
+| `backend/src/demo/hospital_chat/api.py` | Endpoint `POST /ask`: kiểm tra CSRF, trả luồng SSE |
+| `.../config.py` | Đọc toàn bộ biến cấu hình `HOSPITAL_CHAT_*` |
+| `.../catalog.py` | Ngữ cảnh dashboard, danh mục dataset theo người dùng, ẩn cột nhạy cảm, khớp tên |
+| `.../data.py` | Chạy truy vấn qua `ChartDataCommand` (quyền + RLS) |
+| `.../query.py` | Dựng truy vấn: metric/tổng hợp, bộ lọc, thời gian, sắp xếp |
+| `.../timerange.py` | Nhận diện mốc thời gian tiếng Việt và đề xuất `time_range` |
+| `.../text.py` | So khớp không dấu |
+| `.../tools.py` | Khai báo và thực thi các công cụ cho AI |
+| `.../prompt.py` | Soạn system prompt (dashboard, dataset, quy tắc) |
+| `.../charts.py` | Dựng biểu đồ và link "Mở trong Superset" |
+| `.../providers.py` | Vòng gọi Ollama / Gemini dạng streaming, model dự phòng |
+| `.../history.py` | Nhớ hội thoại trong cache Redis |
+| `.../entrypoint.py` | Superset nạp file này khi khởi động để đăng ký API |
 | `frontend/src/index.tsx` | Đăng ký khung chat với Superset (`chat.registerChat`) |
+| `frontend/src/api.ts` | Gọi `POST /ask` kèm CSRF token, đọc luồng SSE, nhận biết dashboard đang mở |
 | `frontend/src/ChatTrigger.tsx` | Nút bong bóng 💬/✕, bật/tắt khung chat |
-| `frontend/src/ChatPanel.tsx` | Khung chat: tin nhắn, ô nhập, nút "Cuộc trò chuyện mới" |
+| `frontend/src/ChatPanel.tsx` | Khung chat: tin nhắn streaming, tiến trình xử lý, nút "Cuộc trò chuyện mới" |
 | `frontend/src/store.ts` | Trạng thái hội thoại phía trình duyệt (giữ khi đóng/mở lại khung chat) |
 | `frontend/src/Markdown.tsx` | Hiển thị Markdown an toàn (không dùng innerHTML) |
 | `frontend/src/Chart.tsx` | Biểu đồ cột / đường / tròn bằng SVG |
@@ -63,7 +86,8 @@ ngay trong khung chat.
 
 ### 1. Chuẩn bị dataset
 
-Trợ lý chỉ đọc các dataset liệt kê trong `HOSPITAL_CHAT_DATASETS`. Nó dùng
+Trợ lý đọc các dataset của dashboard đang mở cộng với các dataset trong
+`HOSPITAL_CHAT_DATASETS` (chỉ những dataset người dùng có quyền xem). Nó dùng
 **metric** và **mô tả cột** của dataset để hiểu dữ liệu, nên dataset càng được
 mô tả kỹ thì AI trả lời càng đúng.
 
@@ -95,7 +119,9 @@ Thêm nội dung của `superset_config.example.py` vào `superset_config.py`:
 | `GEMINI_API_KEY` | Khóa Gemini (khi dùng `gemini`) | – |
 | `HOSPITAL_CHAT_MODEL` | Model Gemini chính | `gemini-3.8-flash` |
 | `HOSPITAL_CHAT_FALLBACK_MODELS` | Model Gemini dự phòng khi quá tải hoặc hết hạn mức | – |
-| `HOSPITAL_CHAT_DATASETS` | Id các dataset được tra cứu | `24,30` |
+| `HOSPITAL_CHAT_DATASETS` | Id các dataset luôn được tra cứu (cộng với dataset của dashboard đang mở) | `24,30` |
+| `HOSPITAL_CHAT_DASHBOARD_ONLY` | `true`: khi đang mở dashboard thì chỉ dùng dataset của dashboard đó | `false` |
+| `HOSPITAL_CHAT_SENSITIVE_COLUMNS` | Cột ẩn với AI: `cột` (mọi dataset) hoặc `<dataset_id>.cột` | – |
 | `HOSPITAL_CHAT_VALUE_COLUMNS` | Cột cần đưa danh sách giá trị cho AI (tên khoa...) | `ward,bed_status,...` |
 | `HOSPITAL_CHAT_MAX_ROWS` | Số dòng tối đa mỗi truy vấn | `200` |
 | `HOSPITAL_CHAT_HISTORY_TURNS` | Số lượt hỏi–đáp được nhớ | `8` |
@@ -131,8 +157,14 @@ thấy `npm` trên Windows.
   liệu như trên dashboard.
 - Trợ lý chỉ có công cụ **đọc** (`query_dataset`, `draw_chart`), không sửa hay
   xóa được dữ liệu.
-- Dữ liệu nhạy cảm nên được loại bỏ ngay ở dataset. Ví dụ dataset ghi chú lâm
-  sàng không có cột nội dung.
+- Cột nhạy cảm được ẩn hoàn toàn với AI: không có trong mô tả gửi cho AI, không
+  chọn, lọc hay nhóm được. Đánh dấu bằng `HOSPITAL_CHAT_SENSITIVE_COLUMNS` hoặc
+  thêm `{"ai_sensitive": true}` (hoặc `{"ai_queryable": false}`) vào trường
+  `extra` của cột trong Superset. Dữ liệu rất nhạy cảm vẫn nên loại khỏi dataset,
+  như dataset ghi chú lâm sàng không có cột nội dung.
+- Endpoint `/ask` dùng `POST` (câu hỏi không nằm trên URL hay log truy cập) và
+  tự kiểm tra CSRF token, vì REST API của FAB được miễn kiểm tra CSRF mặc định.
+- Khi mở dashboard, quyền xem dashboard được kiểm tra trước khi dùng dataset của nó.
 - Khi dùng Gemini, kết quả truy vấn (có thể gồm tên và chẩn đoán của bệnh nhân)
   được gửi tới Google. Dùng Ollama nội bộ nếu dữ liệu không được phép ra ngoài.
 

@@ -1,46 +1,93 @@
 import React, { useEffect, useRef, useState } from "react";
 import { chat } from "@apache-superset/core";
-import Chart from "./Chart";
+import { currentDashboard, streamAsk } from "./api";
+import Chart, { type ChartSpec } from "./Chart";
 import Markdown from "./Markdown";
-
 import {
   addMsg,
   getState,
   reset,
+  setDashboard,
   setLoading,
   subscribe,
+  updateLast,
 } from "./store";
-
-// Backend REST endpoint registered by the extension (see backend/src/.../api.py).
-// The @api decorator mounts RestApi classes under /extensions/{publisher}/{name}/.
-const ASK_URL = "/extensions/demo/hospital-chat/ask";
 
 async function ask(question: string) {
   const { conversationId } = getState();
   addMsg({ role: "user", content: question }, conversationId);
-  setLoading(true);
+  addMsg({ role: "assistant", content: "", steps: [], pending: true }, conversationId);
+  setLoading(true, conversationId);
+  const update = (fn: Parameters<typeof updateLast>[0]) => updateLast(fn, conversationId);
   try {
-    const params = new URLSearchParams({
-      question,
-      conversation_id: conversationId,
-    });
-    const res = await fetch(`${ASK_URL}?${params}`, {
-      method: "GET",
-      headers: { Accept: "application/json" },
-      credentials: "same-origin",
-    });
-    const data = await res.json();
-    const answer =
-      data?.result?.answer ??
-      data?.message ??
-      "Lỗi: không nhận được phản hồi từ máy chủ.";
-    const charts = Array.isArray(data?.result?.charts) ? data.result.charts : [];
-    addMsg({ role: "assistant", content: answer, charts }, conversationId);
+    await streamAsk(
+      { question, conversation_id: conversationId, dashboard: currentDashboard() },
+      (event) => {
+        switch (event.type) {
+          case "context":
+            setDashboard(event.dashboard?.title ?? null);
+            break;
+          case "tool_start":
+            update((m) => ({ ...m, steps: [...(m.steps ?? []), { text: `${event.label}…` }] }));
+            break;
+          case "tool_result":
+            update((m) => ({
+              ...m,
+              steps: [...(m.steps ?? []), { text: event.summary, ok: event.ok }],
+              charts: event.chart ? [...(m.charts ?? []), event.chart as ChartSpec] : m.charts,
+            }));
+            break;
+          case "token":
+            update((m) => ({ ...m, content: m.content + event.text }));
+            break;
+          case "discard":
+            update((m) => ({ ...m, content: "" }));
+            break;
+          case "error":
+            update((m) => ({
+              ...m,
+              content: (m.content ? m.content + "\n\n" : "") + event.message,
+            }));
+            break;
+          default:
+            break;
+        }
+      },
+    );
   } catch (e) {
-    addMsg({ role: "assistant", content: "Lỗi kết nối: " + String(e) }, conversationId);
+    update((m) => ({ ...m, content: "Lỗi kết nối: " + String((e as Error).message || e) }));
   } finally {
-    if (getState().conversationId === conversationId) setLoading(false);
+    update((m) => ({ ...m, pending: false, content: m.content || "(Không có câu trả lời)" }));
+    setLoading(false, conversationId);
   }
+}
+
+function Steps({ steps, pending }: { steps: { text: string; ok?: boolean }[]; pending?: boolean }) {
+  if (!steps.length) return null;
+  const list = (
+    <div style={{ marginTop: 4 }}>
+      {steps.map((s, i) => (
+        <div key={i} style={{ color: s.ok === false ? "#c92a2a" : "#868e96" }}>
+          {s.ok === undefined ? "⋯" : s.ok ? "✓" : "✗"} {s.text}
+        </div>
+      ))}
+    </div>
+  );
+  // While streaming, show the progress; afterwards fold it away.
+  return (
+    <div style={{ fontSize: 12, whiteSpace: "normal", marginBottom: 6 }}>
+      {pending ? (
+        list
+      ) : (
+        <details>
+          <summary style={{ cursor: "pointer", color: "#868e96" }}>
+            Chi tiết xử lý ({steps.filter((s) => s.ok !== undefined).length} bước)
+          </summary>
+          {list}
+        </details>
+      )}
+    </div>
+  );
 }
 
 // Local models on CPU can take minutes; show that the request is alive.
@@ -58,7 +105,7 @@ function Elapsed() {
 }
 
 export default function ChatPanel() {
-  const [{ msgs, loading }, setView] = useState(getState);
+  const [{ msgs, loading, dashboard }, setView] = useState(getState);
   const [input, setInput] = useState("");
   const listRef = useRef<HTMLDivElement>(null);
 
@@ -104,7 +151,24 @@ export default function ChatPanel() {
           fontWeight: 600,
         }}
       >
-        <span>Trợ lý bệnh viện</span>
+        <span style={{ minWidth: 0 }}>
+          <div>Trợ lý bệnh viện</div>
+          {dashboard && (
+            <div
+              title={dashboard}
+              style={{
+                fontSize: 11,
+                fontWeight: 400,
+                color: "#868e96",
+                whiteSpace: "nowrap",
+                overflow: "hidden",
+                textOverflow: "ellipsis",
+              }}
+            >
+              Dashboard: {dashboard}
+            </div>
+          )}
+        </span>
         <span style={{ display: "flex", alignItems: "center", gap: 4 }}>
           <button
             type="button"
@@ -168,16 +232,17 @@ export default function ChatPanel() {
                 color: m.role === "user" ? "#fff" : "#222",
               }}
             >
-              {m.role === "assistant" ? <Markdown text={m.content} /> : m.content}
+              {m.role === "assistant" && <Steps steps={m.steps ?? []} pending={m.pending} />}
+              {m.role === "assistant" && m.pending && !m.content && (
+                <span style={{ color: "#888", fontStyle: "italic" }}>
+                  <Elapsed />
+                </span>
+              )}
+              {m.role === "assistant" ? m.content && <Markdown text={m.content} /> : m.content}
               {m.charts?.map((c, j) => <Chart key={j} spec={c} />)}
             </div>
           </div>
         ))}
-        {loading && (
-          <div style={{ color: "#888", fontStyle: "italic" }}>
-            <Elapsed />
-          </div>
-        )}
       </div>
 
       <div style={{ display: "flex", gap: 8, padding: 12, borderTop: "1px solid #eee" }}>

@@ -1,16 +1,28 @@
 // Conversation state lives outside the panel: the host unmounts the panel when
-// the chat is closed, and an answer may still arrive after that. The state is
-// also mirrored to sessionStorage so a page reload keeps the conversation.
+// the chat is closed, and an answer may still be streaming in after that. The
+// state is also mirrored to sessionStorage so a page reload keeps the conversation.
 
 import type { ChartSpec } from "./Chart";
+
+export type Step = { text: string; ok?: boolean };
 
 export type Msg = {
   role: "user" | "assistant";
   content: string;
   charts?: ChartSpec[];
+  // Progress of the request ("Đang truy vấn dữ liệu", "Đã lấy 5 dòng"...).
+  steps?: Step[];
+  // True while the answer is still streaming.
+  pending?: boolean;
 };
 
-type State = { conversationId: string; msgs: Msg[]; loading: boolean };
+type State = {
+  conversationId: string;
+  msgs: Msg[];
+  loading: boolean;
+  // Dashboard the backend answered for, shown in the panel header.
+  dashboard: string | null;
+};
 
 const STORAGE_KEY = "hospital-chat:conversation";
 
@@ -29,7 +41,7 @@ function newId(): string {
 }
 
 function fresh(): State {
-  return { conversationId: newId(), msgs: [GREETING], loading: false };
+  return { conversationId: newId(), msgs: [GREETING], loading: false, dashboard: null };
 }
 
 function load(): State {
@@ -38,7 +50,11 @@ function load(): State {
     if (raw) {
       const saved = JSON.parse(raw);
       if (saved?.conversationId && Array.isArray(saved.msgs)) {
-        return { conversationId: saved.conversationId, msgs: saved.msgs, loading: false };
+        // A reload cuts any answer that was still streaming.
+        const msgs = saved.msgs.map((m: Msg) =>
+          m.pending ? { ...m, pending: false, content: m.content || "(Đã bị gián đoạn)" } : m,
+        );
+        return { conversationId: saved.conversationId, msgs, loading: false, dashboard: null };
       }
     }
   } catch {
@@ -78,10 +94,23 @@ export function addMsg(msg: Msg, conversationId: string) {
   set({ ...state, msgs: [...state.msgs, msg] });
 }
 
-export function setLoading(loading: boolean) {
+/** Update the newest message (the answer being streamed). */
+export function updateLast(fn: (m: Msg) => Msg, conversationId: string) {
+  if (conversationId !== state.conversationId || !state.msgs.length) return;
+  const msgs = state.msgs.slice();
+  msgs[msgs.length - 1] = fn(msgs[msgs.length - 1]);
+  set({ ...state, msgs });
+}
+
+export function setLoading(loading: boolean, conversationId: string) {
+  if (conversationId !== state.conversationId) return;
   set({ ...state, loading });
 }
 
+export function setDashboard(dashboard: string | null) {
+  set({ ...state, dashboard });
+}
+
 export function reset() {
-  set(fresh());
+  set({ ...fresh(), dashboard: state.dashboard });
 }
