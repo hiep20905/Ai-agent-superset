@@ -1,0 +1,29 @@
+# Hospital AI Agent: add these lines to superset_config.py.
+# The extension backend reads them via os.getenv at request time.
+import os
+
+FEATURE_FLAGS = {"ENABLE_EXTENSIONS": True}  # merge into your existing FEATURE_FLAGS
+EXTENSIONS_PATH = "/app/docker/extensions"
+
+# AI provider: "ollama" = internal AI (data stays on the local network, no API
+# key, no quota); "gemini" = Google Gemini API (needs GEMINI_API_KEY).
+os.environ.setdefault("HOSPITAL_CHAT_PROVIDER", "ollama")
+# Ollama on the Docker host; point at the internal GPU server's IP if you have one.
+os.environ.setdefault("HOSPITAL_CHAT_OLLAMA_URL", "http://host.docker.internal:11434")
+os.environ.setdefault("HOSPITAL_CHAT_OLLAMA_MODEL", "qwen3:8b")
+
+# Gemini (only when HOSPITAL_CHAT_PROVIDER = "gemini"). Never commit the key:
+# set GEMINI_API_KEY in the container environment (e.g. docker/.env-local).
+os.environ.setdefault("HOSPITAL_CHAT_MODEL", "gemini-3.8-flash")
+# Tried in order when the primary model is overloaded (503) or out of quota (429).
+os.environ.setdefault(
+    "HOSPITAL_CHAT_FALLBACK_MODELS",
+    "gemini-3.6-flash,gemini-3.5-flash,gemini-3.5-flash-lite,gemini-flash-lite-latest",
+)
+
+# Superset datasets the assistant may query. Queries run as the asking user,
+# so dataset permissions and Row Level Security apply as on dashboards.
+os.environ.setdefault("HOSPITAL_CHAT_DATASETS", "24,30")
+os.environ.setdefault("HOSPITAL_CHAT_MAX_ROWS", "200")
+# Question/answer pairs remembered per conversation (stored in the Superset cache).
+os.environ.setdefault("HOSPITAL_CHAT_HISTORY_TURNS", "8")
