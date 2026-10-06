@@ -19,6 +19,7 @@ in config.py.
 
 import json
 import logging
+import time
 from collections.abc import Iterator
 
 from flask import request, Response, stream_with_context
@@ -26,8 +27,8 @@ from flask_appbuilder.api import expose, permission_name, protect, safe
 from superset_core.rest_api.api import RestApi
 from superset_core.rest_api.decorators import api
 
-from . import history, prompt
-from .catalog import ContextError, load_context
+from . import history, prompt, questionlog
+from .catalog import can_search, ContextError, load_context
 from .providers import ModelsUnavailable, stream
 from .tools import RequestState
 
@@ -54,7 +55,8 @@ def _answer(question: str, conversation_id: str, dashboard_ref: object) -> Itera
             "datasets": [ds["name"] for ds in context["datasets"].values()],
         }
     )
-    if not context["datasets"]:
+    searchable = can_search(context)
+    if not context["datasets"] and not searchable:
         yield _sse(
             {
                 "type": "error",
@@ -66,22 +68,27 @@ def _answer(question: str, conversation_id: str, dashboard_ref: object) -> Itera
 
     key = history.key_for(conversation_id)
     turns = history.load(key)
-    state = RequestState(question=question, context=context)
+    previous = next((t["text"] for t in reversed(turns) if t["role"] == "user"), "")
+    state = RequestState(question=question, context=context, recent=previous)
     answer = ""
+    started = time.time()
     try:
-        for event in stream(prompt.build(context), question, turns, state):
+        for event in stream(prompt.build(context, searchable), question, turns, state):
             if event["type"] == "token":
                 answer += event["text"]
             elif event["type"] == "discard":
                 answer = ""
             yield _sse(event)
     except ModelsUnavailable as ex:
+        questionlog.write(question, context, state, answer, str(ex), started)
         yield _sse({"type": "error", "message": str(ex)})
         return
     except Exception as ex:  # pylint: disable=broad-except
         logger.exception("hospital-chat: answer failed")
+        questionlog.write(question, context, state, answer, repr(ex), started)
         yield _sse({"type": "error", "message": f"Lỗi máy chủ: {ex}"})
         return
+    questionlog.write(question, context, state, answer.strip(), None, started)
     history.append(key, turns, question, answer.strip())
     yield _sse({"type": "done"})
 
@@ -89,7 +96,7 @@ def _answer(question: str, conversation_id: str, dashboard_ref: object) -> Itera
 @api(
     id="hospital_chat_api",
     name="Hospital Chat API",
-    description="Trả lời câu hỏi về dữ liệu bệnh viện từ dataset Superset bằng AI.",
+    description="Trả lời câu hỏi về dữ liệu từ dataset Superset bằng AI.",
 )
 class HospitalChatAPI(RestApi):
     openapi_spec_tag = "Hospital Chat"

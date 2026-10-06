@@ -41,6 +41,8 @@ def _explore_url(ds: dict, meta: dict, chart_type: str) -> str:
     }
     if meta["time_col"]:
         form_data["granularity_sqla"] = meta["time_col"]
+    if meta.get("time_grain"):
+        form_data["time_grain_sqla"] = meta["time_grain"]
     if chart_type == "pie":
         form_data.update(viz_type="pie", groupby=columns[:1], metric=metrics[0])
     else:

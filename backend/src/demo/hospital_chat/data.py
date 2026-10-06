@@ -31,7 +31,11 @@ def execute(dataset_id: int, query: dict[str, Any]) -> dict[str, Any]:
     first = ((result or {}).get("queries") or [{}])[0]
     if first.get("error"):
         return {"error": str(first["error"])}
-    rows = first.get("data") or []
+    # NaN/NaT (e.g. a SUM over no matching row) read as "no value", not a number.
+    rows = [
+        {k: (None if v is not None and v != v else v) for k, v in row.items()}
+        for row in first.get("data") or []
+    ]
     return {
         "columns": first.get("colnames") or (list(rows[0]) if rows else []),
         "rows": rows,

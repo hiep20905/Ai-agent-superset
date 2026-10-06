@@ -27,6 +27,21 @@ os.environ.setdefault(
 os.environ.setdefault("HOSPITAL_CHAT_DATASETS", "24,30")
 # "true": on a dashboard, use only that dashboard's datasets.
 os.environ.setdefault("HOSPITAL_CHAT_DASHBOARD_ONLY", "false")
+# "true": the assistant may search (search_datasets) and query any other dataset
+# the user can access. Off when DASHBOARD_ONLY applies.
+os.environ.setdefault("HOSPITAL_CHAT_SEARCH_ALL", "true")
+# Who the assistant is (the extension code itself is domain-agnostic).
+os.environ.setdefault(
+    "HOSPITAL_CHAT_ROLE",
+    "Bạn là trợ lý phân tích dữ liệu bệnh viện (giường bệnh, bệnh nhân nội trú, "
+    "ghi chú lâm sàng) trên Superset.",
+)
+# Notes for every question. Notes about one dataset live on the dataset itself:
+# "ai_notes" in its Superset `extra` JSON (see setup_ai_notes.py).
+os.environ.setdefault("HOSPITAL_CHAT_DOMAIN_NOTES", "")
+# Every question, tool call and answer, for review and test cases. Contains
+# query results: protect it like the data itself. Empty = off.
+os.environ.setdefault("HOSPITAL_CHAT_LOG_FILE", "/app/superset_home/hospital_chat_questions.jsonl")
 # Columns hidden from the assistant: "column" (any dataset) or "<dataset_id>.column".
 os.environ.setdefault("HOSPITAL_CHAT_SENSITIVE_COLUMNS", "")
 os.environ.setdefault("HOSPITAL_CHAT_MAX_ROWS", "200")
